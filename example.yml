@@ -1,0 +1,203 @@
+---
+version: '3.3'
+services:
+  postgres:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_postgres
+    hostname: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_postgres
+    image: postgres:11
+    env_file:
+      - .env
+    volumes:
+      - ./postgresql:/var/lib/postgresql/data:rw
+      - ./localtime:/etc/localtime:ro
+    ports:
+      - 5438:5432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - custom_network
+
+  airflow-webserver:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_airflow_webserver
+    restart: always
+    image: kivi/balte:0.0.1
+    command: ["/opt/conda/envs/env_balte_0.0.3/bin/airflow", "webserver"]
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./airflow:/root/airflow:rw
+      - ./localtime:/etc/localtime:ro
+    ports:
+      - "${AIRFLOW_EXPOSED_PORT}:8080"
+    depends_on:
+      - postgres
+    networks:
+      - custom_network
+
+  airflow-scheduler:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_airflow_scheduler
+    restart: always
+    image: kivi/balte:0.0.1
+    command: ["/opt/conda/envs/env_balte_0.0.3/bin/airflow","scheduler"]
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./airflow:/root/airflow:rw
+      - ./scripts:/scripts:rw
+      - ./balte_live/log:/opt/balte_live/log:rw
+      - ./balte_live/pyce_token:/opt/balte_live/pyce_token:rw
+      - ./pyce:/opt/balte_live/pyce:rw
+      - ~/.ssh/:/root/.ssh:ro # used for git pull of pyce.
+      - ./localtime:/etc/localtime:ro
+    depends_on:
+      - postgres
+    networks:
+      - custom_network
+
+  zookeeper:
+      image: wurstmeister/zookeeper:latest
+      container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_zookeeper
+      restart: always
+      ports:
+        - "32181:2181"
+      networks:
+        - custom_network
+      env_file:
+        - .env
+      volumes:
+        - ./localtime:/etc/localtime:ro
+
+  kafka:
+      image: wurstmeister/kafka:latest
+      container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_kafka
+      ports:
+        - "19093:19093"
+      restart: always
+      networks:
+        - custom_network
+      depends_on:
+        - zookeeper
+      env_file:
+        - .env
+      volumes:
+        - ./kafka/data:/kafka
+        - ./localtime:/etc/localtime:ro
+
+  oms:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_oms
+    restart: always
+    image: kivi/oms:0.0.1
+    command: ["/opt/conda/envs/env_oms_0.0.3/bin/python", "runner.py", "test", "--trading_universe", "krx", "--port", "8080"]
+    ports:
+        - "17080:8080"
+    networks:
+        - custom_network
+    depends_on:
+        - kafka
+        - zookeeper
+    env_file:
+      - .env
+    volumes:
+      - ./balte_live/log:/opt/balte_live/log:rw
+      - ./localtime:/etc/localtime:ro
+
+  oms_db_executor:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_oms_db_executor
+    restart: always
+    image: kivi/oms:0.0.1
+    command: ["/opt/conda/envs/env_oms_0.0.3/bin/python", "db_executor_runner.py", "test", "krx", "sync"]
+    networks:
+        - custom_network
+    depends_on:
+        - kafka
+        - zookeeper
+    env_file:
+      - .env
+    volumes:
+      - ./localtime:/etc/localtime:ro
+      - ./balte_live/log:/opt/balte_live/log:rw
+
+  db:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_mysql
+    image: mysql:5.7
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    networks:
+        - custom_network
+    volumes:
+      - ./mysql-master/config/:/etc/mysql/conf.d/:rw
+      - ./mysql-initdb:/docker-entrypoint-initdb.d # Initial dump in mysql server
+      - ./mysql:/var/lib/mysql
+      - ./localtime:/etc/localtime:ro
+    env_file:
+      - .env
+    ports:
+        - "3307:3306"
+
+  minio:
+    container_name: ${EXCHANGE_TYPE}-${EXECUTION_LEVEL}-minio
+    restart: always
+    hostname: ${EXCHANGE_TYPE}-${EXECUTION_LEVEL}-minio
+    image: quay.io/minio/minio:RELEASE.2023-09-30T07-02-29Z
+    volumes:
+      - ./minio/data:/data
+      - ./localtime:/etc/localtime:ro
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    networks:
+        - custom_network
+    env_file:
+      - .env
+    command: server --console-address ":9001" /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  exit_portal:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_exit_portal
+    restart: always
+    hostname: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_streamlit
+    image: docker.io/kivi/streamlit:0.0.1
+    ports:
+      - "8501:8501"
+    networks:
+        - custom_network
+    env_file:
+      - .env
+    volumes:
+      - ./localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  ib-gateway:
+    container_name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}_ib-gateway
+    restart: always
+    image: ghcr.io/gnzsnz/ib-gateway:latest
+    env_file:
+      - .env
+    volumes:
+      - ./localtime:/etc/localtime:ro
+    ports:
+      - "192.168.0.201:4001:4003"
+      - "192.168.0.201:4002:4004"
+      - "192.168.0.201:5900:5900"
+
+networks:
+    custom_network:
+        name: ${EXCHANGE_TYPE}_${EXECUTION_LEVEL}
+        driver: bridge
