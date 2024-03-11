@@ -1,0 +1,21 @@
+Docker storage 
+ - docker volume cmd 
+    docker volume create my-vol 
+
+    mount the volume container 
+    docker run -d --mount source=my-vol,destination=/app ubuntu  -EXAMPLE
+
+ - docker bind mount 
+   docker -d -v <absolute_path>:<distination_in_container> <image_name>
+
+Docker Linking 
+ - let run one container with specific name 
+   docker run --name container1 -d <image-name>
+ - linking 2 container together 
+   docker run --name container2 --link container2 -d <image-name>
+ - test by ping container12 to container1
+
+Docker Compose
+ - sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+ - sudo chmod +x /usr/local/bin/docker-compose
+ - docker-compose --version
